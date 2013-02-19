@@ -1,0 +1,184 @@
+(*
+Program to control the deployment of a Mercury container onto a machine.
+*)
+
+open Core.Std;;
+open Sys;;
+open Unix;;
+
+(*
+Mountpoint type.
+*)
+type mountpoint = {
+device : string;
+directory : string;
+fstype : string;
+opts : string list;
+}
+;;
+
+(*
+Some basic configuration options about where things are allowed to live etc.
+*)
+let cvmfs_location = List.map ~f:Filename.parts ["/cvmfs/hgi.repo";"/var/lib/lxc"];;
+
+let overlay_location template = {
+device = "none";
+directory = (getenv_exn "HOME")^"/cvmfs";
+fstype = "aufs";
+opts = [Printf.sprintf "dirs=/tmp/overlay_%d:%s/rootfs/" (Random.bits ()) template]
+}
+
+(*
+Some temporary variables which will eventually be passed in in some way.
+*)
+let mountpoints = [
+{ 
+device = "/tmp/foo";
+directory = "/tmp/foo";
+fstype = "none";
+opts = ["bind"];
+}
+]
+;;
+
+let console_login_file template = 
+  template ^ "/rootfs/etc/systemd/system/console-autologin.service"
+;;
+
+let template_loc = "/var/lib/lxc/archibald";;
+
+(*
+Program proper.
+*)
+let usage () =
+  print_string "Usage: hg-deploy foo bar baz"
+;;
+
+(*
+Utility functions for use elsewhere.
+*)
+
+let (>|) v f = f v;;
+
+let partial_zip l1 l2 =
+  let open List in
+  let rec pzip_helper l1 l2 acc = match (l1, l2) with
+  | (a :: t1, b :: t2) -> pzip_helper t1 t2 ((a,b) :: acc)
+  | _ -> acc in
+  rev (pzip_helper l1 l2 [])
+;;
+
+(*
+Executes a process, waits until it finishes, and then returns the exit status.
+*)
+let exec_wait command args =
+  let proc = create_process command args in
+  let pid = proc.Process_info.pid in
+  waitpid pid
+;;
+
+(*
+Test a file with some file testing thing.
+*)
+let file_test test file msg = match (test file) with
+| `Yes -> Ok ()
+| `Unknown -> Error ("Cannot determine status of required file: "^file^"\n")
+| `No -> Error msg
+
+(*
+Test for allowed location of CVMFS template.
+*)
+let check_location to_check against_list =
+  let chk_parts = Filename.parts to_check in
+  let chk_single_loc against =
+    List.for_all (partial_zip chk_parts against) (fun (x,y) -> x = y) in
+    List.exists against_list chk_single_loc
+  ;;
+
+(*
+Need to verify various things about a template.
+1. Needs to be in a list of approved templates - i.e. people can't just get the system
+to boot a random one of their own. Either we accomplish this through signatures or
+through maintaining a specific list somewhere.
+2. Verify that it has a config and fstab.
+3. Maybe check that the config file points to an appropriate place?
+*)
+let check_template_status template =
+  let open Result.Monad_infix in
+  let fs_status =
+    file_test file_exists template "Template directory not found." >>= fun _ ->
+    file_test is_directory template "Template directory not a directory." >>= fun _ ->
+    file_test file_exists (template ^ "/fstab") "fstab not found" >>= fun _ ->
+    file_test file_exists (template ^ "/rootfs") "fstab not found" >>= fun _ ->
+    file_test file_exists (template ^ "/config") "config not found" >>| fun _ ->
+    Ok () 
+  in
+  let location_okay =
+    if check_location template cvmfs_location then Ok () else
+    Error "Template is stored in disallowed location." in
+    fs_status >>= fun _ ->
+    location_okay >>| fun _ ->
+    Ok ()
+  ;;
+
+(*
+Configure the container in various ways:
+1. Overlay the AUFS image.
+2. Add the user into /etc/passwd.
+3. Set up auto-boot into a console for the user.
+4. Scramble the root password?
+*)
+let configure_container template =
+  let open Result.Monad_infix in
+  let mount_succ () =
+    let ol = overlay_location template in
+    let mount_opts = (List.fold ol.opts ~init:"" ~f:(fun x y -> x ^ y)) in
+    let status = exec_wait "mount" ["-t "^ol.fstype;
+    ol.device;
+    ol.directory;
+    "-o "^mount_opts] in
+    Result.map_error status (fun _ -> "Unable to mount device "^ol.device^"\n") 
+  in
+  let add_user () = 
+    let login_name = getlogin () in
+    let realuid = Int.to_string (getuid ()) in 
+    let realgid = Int.to_string (getgid ()) in
+    let status = exec_wait "adduser" ["-m"; "-u "^realuid; "-g "^realgid; login_name] in
+    Result.map status ~f:(fun _ -> login_name) >| 
+    Result.map_error ~f:(fun _ -> "Unable to add user.") 
+  in
+  let add_auto_boot username = 
+    let cf = console_login_file template in
+    let status = exec_wait "sed" ["-i";"s/thetis/"^username;cf] in
+    Result.map_error status ~f:(fun _ -> "Unable to set up auto-boot.") 
+  in
+  mount_succ () >>= fun _ ->
+  add_user () >>= fun name ->
+  add_auto_boot name >>| fun _ ->
+  Ok () 
+;;
+
+let () =
+let realuid = getuid () in
+let euid = geteuid () in
+if euid = 0 then begin
+  print_string ("UID "^(Int.to_string realuid)^"\n");
+  print_string ("EUID "^(Int.to_string euid)^"\n");
+  print_string ("Login: "^getlogin ()^"\n");
+  let open Result.Monad_infix in
+  let status = 
+    check_template_status template_loc >>= fun _ ->
+    configure_container template_loc >>| fun _ ->
+    Ok () in
+    match status with
+    | Ok _ -> exit 0
+    | Error err -> begin
+      output_string (out_channel_of_descr stderr) (err^"\n");
+      exit 1
+    end
+  end else begin
+    output_string (out_channel_of_descr stderr) "Must be run as suid root.\n";
+    exit 1
+  end
+;;
