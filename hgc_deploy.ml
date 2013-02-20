@@ -115,15 +115,16 @@ module Configure = struct
     let mount_succ () =
       let ol = overlay_location template mount_loc tmp_loc in
       let mount_opts = (List.fold ol.opts ~init:"" ~f:(fun x y -> x ^ y)) in
-      let status = exec_wait "mount" ["-t "^ol.fstype;
+      let res = Shell.run "mount" ["-t"^ol.fstype;
       ol.device;
       ol.directory;
-      "-o "^mount_opts] in
-      map_error status (fun _ -> "Unable to mount device :\n"^
+      "-o"^mount_opts] in
+      map_error res.Shell.Result.status (fun _ -> "Unable to mount device :\n"^
         ol.device^"\n"^
         ol.directory^"\n"^
         ol.fstype^"\n"^
-        mount_opts^"\n"
+        mount_opts^"\n"^
+        res.Shell.Result.stderr
         ) 
     in
     let add_user () = 
@@ -131,13 +132,13 @@ module Configure = struct
       let login_name = getlogin () in
       let realuid = Int.to_string (getuid ()) in 
       let realgid = Int.to_string (getgid ()) in
-      let status = exec_wait "adduser" ["-m"; "-u "^realuid; "-g "^realgid; login_name] in
+      let status = Shell.exec_wait "adduser" ["-m"; "-u "^realuid; "-g "^realgid; login_name] in
       map status ~f:(fun _ -> login_name) >| 
       map_error ~f:(fun _ -> "Unable to add user.") 
     in
     let add_auto_boot username = 
       let cf = console_login_file template in
-      let status = exec_wait "sed" ["-i";"s/thetis/"^username;cf] in
+      let status = Shell.exec_wait "sed" ["-i";"s/thetis/"^username;cf] in
       map_error status ~f:(fun _ -> "Unable to set up auto-boot.") 
     in
     create_locations () >>= fun _ ->
@@ -176,6 +177,7 @@ if euid = 0 then begin
   print_string ("UID "^(Int.to_string realuid)^"\n");
   print_string ("EUID "^(Int.to_string euid)^"\n");
   print_string ("Login: "^getlogin ()^"\n");
+  setuid 0;
   let open Result.Monad_infix in
   let status = 
     Verify.check_template template_loc >>= fun _ ->

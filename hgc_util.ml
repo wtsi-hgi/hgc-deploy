@@ -24,11 +24,26 @@ end
 
 module List = Rich_list
 
-(*
-Executes a process, waits until it finishes, and then returns the exit status.
-*)
-let exec_wait command args =
-  let proc = create_process command args in
-  let pid = proc.Process_info.pid in
-  waitpid pid
-;;
+module Shell = struct
+
+  module Result = struct
+    type t = {
+      status : Exit_or_signal.t;
+      stdout : string;
+      stderr: string
+    }
+  end
+
+  let run command args =
+    let proc = create_process command args in
+    let pid = proc.Process_info.pid in
+    let out = In_channel.input_all (in_channel_of_descr proc.Process_info.stdout) in
+    let err = In_channel.input_all (in_channel_of_descr proc.Process_info.stderr) in
+    Result.({status = (waitpid pid); stdout = out; stderr = err})
+  ;;
+
+  let exec_wait command args = 
+    (run command args).Result.status 
+  ;;
+
+end
