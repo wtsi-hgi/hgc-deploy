@@ -18,14 +18,6 @@ module Common = struct
     opts : string list;
   }
 
-  let overlay_location template = {
-    device = "none";
-    directory = (getenv_exn "HOME")^"/cvmfs";
-    fstype = "aufs";
-    opts = [Printf.sprintf "dirs=/tmp/overlay_%d:%s/rootfs/" (Random.bits ()) template]
-  }
-
-
 end
 
 (*
@@ -98,6 +90,13 @@ module Configure = struct
     template ^ "/rootfs/etc/systemd/system/console-autologin.service"
   ;;
 
+  let overlay_location template mount_loc tmp_loc= {
+    device = "none";
+    directory = mount_loc;
+    fstype = "aufs";
+    opts = [Printf.sprintf "dirs=%s:%s/rootfs/" tmp_loc template]
+  }
+
   (*  Configure the container in various ways: *)
   (* 1. Overlay the AUFS image.*)
   (* 2. Add the user into /etc/passwd.*)
@@ -105,15 +104,27 @@ module Configure = struct
   (* 4. Scramble the root password? *)
 
   let configure_container template mountpoints =
+    let open Result in
     let open Result.Monad_infix in
+    let tmp_loc = "/tmp/hgc/overlay_"^(string_of_int (Random.bits ())) in
+    let mount_loc = (getenv_exn "HOME")^"/cvmfs" in
+    let create_locations () = 
+      map_error (try_with (fun _ -> mkdir_p tmp_loc)) Exn.to_string >>= fun _ ->
+      map_error (try_with (fun _ -> mkdir_p mount_loc)) Exn.to_string
+    in
     let mount_succ () =
-      let ol = overlay_location template in
+      let ol = overlay_location template mount_loc tmp_loc in
       let mount_opts = (List.fold ol.opts ~init:"" ~f:(fun x y -> x ^ y)) in
       let status = exec_wait "mount" ["-t "^ol.fstype;
       ol.device;
       ol.directory;
       "-o "^mount_opts] in
-      Result.map_error status (fun _ -> "Unable to mount device "^ol.device^"\n") 
+      map_error status (fun _ -> "Unable to mount device :\n"^
+        ol.device^"\n"^
+        ol.directory^"\n"^
+        ol.fstype^"\n"^
+        mount_opts^"\n"
+        ) 
     in
     let add_user () = 
       let open Pipe_infix in
@@ -121,18 +132,19 @@ module Configure = struct
       let realuid = Int.to_string (getuid ()) in 
       let realgid = Int.to_string (getgid ()) in
       let status = exec_wait "adduser" ["-m"; "-u "^realuid; "-g "^realgid; login_name] in
-      Result.map status ~f:(fun _ -> login_name) >| 
-      Result.map_error ~f:(fun _ -> "Unable to add user.") 
+      map status ~f:(fun _ -> login_name) >| 
+      map_error ~f:(fun _ -> "Unable to add user.") 
     in
     let add_auto_boot username = 
       let cf = console_login_file template in
       let status = exec_wait "sed" ["-i";"s/thetis/"^username;cf] in
-      Result.map_error status ~f:(fun _ -> "Unable to set up auto-boot.") 
+      map_error status ~f:(fun _ -> "Unable to set up auto-boot.") 
     in
+    create_locations () >>= fun _ ->
     mount_succ () >>= fun _ ->
     add_user () >>= fun name ->
     add_auto_boot name >>| fun _ ->
-    Ok () 
+    () 
   ;;
 
 end
