@@ -61,7 +61,7 @@ end = struct
   let check_location to_check against_list =
     let chk_parts = Filename.parts to_check in
     let chk_single_loc against =
-      List.for_all (partial_zip chk_parts against) (fun (x,y) -> x = y) 
+      List.for_all (List.partial_zip chk_parts against) (fun (x,y) -> x = y) 
     in
     List.exists against_list chk_single_loc 
   ;;
