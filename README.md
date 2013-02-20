@@ -17,3 +17,10 @@ The easiest way to install all of these is using OPAM:
 
 	opam init
   opam install core
+
+Building
+--------
+
+To build, just execute
+
+  ocamlbuild -use-ocamlfind hgc_deploy.native
