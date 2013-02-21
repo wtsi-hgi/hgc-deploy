@@ -134,12 +134,28 @@ module Configure = struct
       let config_file = mount_loc^"/config" in
       let esc = unstage (String.Escaping.escape ['/'] '\\') in
       Shell.exec_wait "sed" ["-i";"s/"^(esc template)^"/"^(esc mount_loc)^"/"; config_file] |>
-      map_error ~f:(fun _ -> "Unable to repoint config file.") in
+      map_error ~f:(fun _ -> "Unable to repoint config file.") 
+    in
     let add_user () = 
-      let login_name = (Passwd.getbyuid_exn realuid).Passwd.name in
-      let cmd = "grep ^"^login_name^": /etc/passwd >> "^mount_loc^"/rootfs/etc/passwd" in
-      let status = system cmd in (* Maybe insecure - use Passwd.t? *)
-      map status ~f:(fun _ -> login_name) |> 
+      let login = (Passwd.getbyuid_exn realuid) in
+      let gen_passwd pwd_t = Passwd.(Printf.sprintf 
+        "%s:%s:%d:%d:%s:%s:%s\n" pwd_t.name pwd_t.passwd 
+        pwd_t.uid pwd_t.gid pwd_t.gecos pwd_t.dir pwd_t.shell) in
+      let gen_shadow pwd_t = Passwd.(Printf.sprintf 
+        "%s:%s:%d:%d:%d:%d:::\n" pwd_t.name "*" 
+        ((Float.to_int (time ())) / 86400) 0 99999 7) in
+      (try_with 
+        (fun _ -> Out_channel.with_file ~append:true (mount_loc^"/rootfs/etc/passwd") 
+          ~f:(fun t -> Out_channel.output_string t (gen_passwd login))) |>
+        map_error ~f:Exn.to_string) >>= fun _ -> 
+      (try_with 
+        (fun _ -> Out_channel.with_file ~append:true (mount_loc^"/rootfs/etc/shadow") 
+          ~f:(fun t -> Out_channel.output_string t (gen_shadow login))) |>
+        map_error ~f:Exn.to_string) >>= fun _ ->
+      (try_with 
+        (fun _ -> mkdir_p (mount_loc^"/rootfs/home/"^login.Passwd.name)) |>
+        map_error ~f:Exn.to_string) |>
+      map ~f:(fun _ -> login.Passwd.name) |> 
       map_error ~f:(fun _ -> "Unable to add user.") 
     in
     let add_auto_boot username = 
@@ -180,6 +196,7 @@ if euid = 0 then begin
   print_string ("UID "^(Int.to_string realuid)^"\n");
   print_string ("EUID "^(Int.to_string euid)^"\n");
   print_string ("Login: "^getlogin ()^"\n");
+  Random.init (Float.to_int (time ()));
   setuid 0;
   let open Result.Monad_infix in
   let status = 
