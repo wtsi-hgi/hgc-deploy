@@ -86,11 +86,13 @@ module Configure = struct
 
   include Common
 
-  let console_login_file template = 
-    template ^ "/rootfs/etc/systemd/system/console-autologin.service"
+  let mount_loc = (getenv_exn "HOME")^"/cvmfs"
+
+  let console_login_file = 
+    mount_loc ^ "/rootfs/etc/systemd/system/console-autologin.service"
   ;;
 
-  let overlay_location template mount_loc tmp_loc= {
+  let overlay_location template tmp_loc= {
     device = "none";
     directory = mount_loc;
     fstype = "aufs";
@@ -107,13 +109,12 @@ module Configure = struct
     let open Result in
     let open Result.Monad_infix in
     let tmp_loc = "/tmp/hgc/overlay_"^(string_of_int (Random.bits ())) in
-    let mount_loc = (getenv_exn "HOME")^"/cvmfs" in
     let create_locations () = 
       map_error (try_with (fun _ -> mkdir_p tmp_loc)) Exn.to_string >>= fun _ ->
       map_error (try_with (fun _ -> mkdir_p mount_loc)) Exn.to_string
     in
     let mount_succ () =
-      let ol = overlay_location template mount_loc tmp_loc in
+      let ol = overlay_location template tmp_loc in
       let mount_opts = (List.fold ol.opts ~init:"" ~f:(fun x y -> x ^ y)) in
       let res = Shell.run "mount" ["-t"^ol.fstype;
       ol.device;
@@ -137,8 +138,7 @@ module Configure = struct
       map_error ~f:(fun _ -> "Unable to add user.") 
     in
     let add_auto_boot username = 
-      let cf = console_login_file template in
-      let status = Shell.exec_wait "sed" ["-i";"s/thetis/"^username;cf] in
+      let status = Shell.exec_wait "sed" ["-i";"s/thetis/"^username;console_login_file] in
       map_error status ~f:(fun _ -> "Unable to set up auto-boot.") 
     in
     create_locations () >>= fun _ ->
