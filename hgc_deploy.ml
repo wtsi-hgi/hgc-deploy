@@ -8,6 +8,8 @@ open Unix;;
 
 open Hgc_util;;
 
+let realuid = getuid ()
+let euid = geteuid ()
 
 module Common = struct 
 
@@ -96,7 +98,7 @@ module Configure = struct
     device = "none";
     directory = mount_loc;
     fstype = "aufs";
-    opts = [Printf.sprintf "dirs=%s:%s/rootfs/" tmp_loc template]
+    opts = [Printf.sprintf "dirs=%s:%s" tmp_loc template]
   }
 
   (*  Configure the container in various ways: *)
@@ -130,10 +132,9 @@ module Configure = struct
     in
     let add_user () = 
       let open Pipe_infix in
-      let login_name = getlogin () in
-      let realuid = Int.to_string (getuid ()) in 
-      let realgid = Int.to_string (getgid ()) in
-      let status = Shell.exec_wait "adduser" ["-m"; "-u "^realuid; "-g "^realgid; login_name] in
+      let login_name = (Passwd.getbyuid_exn realuid).Passwd.name in
+      let cmd = "grep ^"^login_name^": /etc/passwd >> "^mount_loc^"/rootfs/etc/passwd" in
+      let status = system cmd in (* Maybe insecure - use Passwd.t? *)
       map status ~f:(fun _ -> login_name) >| 
       map_error ~f:(fun _ -> "Unable to add user.") 
     in
@@ -171,8 +172,6 @@ let usage () =
 ;;
 
 let () =
-let realuid = getuid () in
-let euid = geteuid () in
 if euid = 0 then begin
   print_string ("UID "^(Int.to_string realuid)^"\n");
   print_string ("EUID "^(Int.to_string euid)^"\n");
