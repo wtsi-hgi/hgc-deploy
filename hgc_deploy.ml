@@ -67,16 +67,14 @@ end = struct
       file_test is_directory template "Template directory not a directory." >>= fun _ ->
       file_test file_exists (template ^ "/fstab") "fstab not found" >>= fun _ ->
       file_test file_exists (template ^ "/rootfs") "fstab not found" >>= fun _ ->
-      file_test file_exists (template ^ "/config") "config not found" >>| fun _ ->
-      ()
+      file_test file_exists (template ^ "/config") "config not found"
     in
     let location_okay =
       if check_location template cvmfs_location then Ok () else
       Error "Template is stored in disallowed location." 
     in
     fs_status >>= fun _ ->
-    location_okay >>| fun _ ->
-    ()
+    location_okay
   ;;
 
 end
@@ -145,8 +143,7 @@ module Configure = struct
     create_locations () >>= fun _ ->
     mount_succ () >>= fun _ ->
     add_user () >>= fun name ->
-    add_auto_boot name >>| fun _ ->
-    () 
+    add_auto_boot name
   ;;
 
 end
@@ -180,8 +177,7 @@ if euid = 0 then begin
   let open Result.Monad_infix in
   let status = 
     Verify.check_template template_loc >>= fun _ ->
-    Configure.configure_container template_loc mountpoints >>| fun _ ->
-    () 
+    Configure.configure_container template_loc mountpoints
   in
   match status with
   | Ok _ -> exit 0
