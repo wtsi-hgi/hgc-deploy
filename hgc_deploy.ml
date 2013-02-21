@@ -100,14 +100,16 @@ module Configure = struct
   }
 
   (*  Configure the container in various ways: *)
-  (* 1. Overlay the AUFS image.*)
-  (* 2. Add the user into /etc/passwd.*)
+  (* 1. Overlay the AUFS image. *)
+  (* 1.5. Modify the config to point to the overlaid rootfs. *)
+  (* 2. Add the user into /etc/passwd. *)
   (* 3. Set up auto-boot into a console for the user. *)
   (* 4. Scramble the root password? *)
 
   let configure_container template mountpoints =
     let open Result in
     let open Result.Monad_infix in
+    let open Pipe_infix in
     let tmp_loc = "/tmp/hgc/overlay_"^(string_of_int (Random.bits ())) in
     let create_locations () = 
       map_error (try_with (fun _ -> mkdir_p tmp_loc)) Exn.to_string >>= fun _ ->
@@ -128,20 +130,25 @@ module Configure = struct
         res.Shell.Result.stderr
         ) 
     in
+    let repoint_config () =
+      let config_file = mount_loc^"/config" in
+      let esc = unstage (String.Escaping.escape ['/'] '\\') in
+      Shell.exec_wait "sed" ["-i";"s/"^(esc template)^"/"^(esc mount_loc)^"/"; config_file] |>
+      map_error ~f:(fun _ -> "Unable to repoint config file.") in
     let add_user () = 
-      let open Pipe_infix in
       let login_name = (Passwd.getbyuid_exn realuid).Passwd.name in
       let cmd = "grep ^"^login_name^": /etc/passwd >> "^mount_loc^"/rootfs/etc/passwd" in
       let status = system cmd in (* Maybe insecure - use Passwd.t? *)
-      map status ~f:(fun _ -> login_name) >| 
+      map status ~f:(fun _ -> login_name) |> 
       map_error ~f:(fun _ -> "Unable to add user.") 
     in
     let add_auto_boot username = 
-      let status = Shell.exec_wait "sed" ["-i";"s/thetis/"^username;console_login_file] in
+      let status = Shell.exec_wait "sed" ["-i";"s/thetis/"^username^"/";console_login_file] in
       map_error status ~f:(fun _ -> "Unable to set up auto-boot.") 
     in
     create_locations () >>= fun _ ->
     mount_succ () >>= fun _ ->
+    repoint_config () >>= fun _ ->
     add_user () >>= fun name ->
     add_auto_boot name
   ;;

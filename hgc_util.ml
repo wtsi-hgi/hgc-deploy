@@ -6,7 +6,7 @@ open Core.Std;;
 open Unix;;
 
 module Pipe_infix = struct
-  let (>|) v f = f v;;
+  let (|>) v f = f v;;
   let (<|) f v = f v;;
 end
 
