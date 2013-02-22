@@ -16,7 +16,7 @@ Requires:
 The easiest way to install all of these is using OPAM:
 
 	opam init
-  opam install core
+	opam install core
 
 Building
 --------
