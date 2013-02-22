@@ -11,6 +11,14 @@ open Hgc_util;;
 let realuid = getuid ()
 let euid = geteuid ()
 
+module Config = struct
+
+  (* Place holder for root directory - will be placed.*)
+  let container_root_directory = "/var/lib/lxc/archibald"
+  (* Place holder for user name - will be replaced. *)
+  let container_user_name = "thetis"
+end
+
 module Common = struct 
 
   type mountpoint = {
@@ -45,7 +53,11 @@ end = struct
   include Common
 
   (* Allowed locations for CVMFS images *)
-  let cvmfs_location = List.map ~f:Filename.parts ["/cvmfs/hgi.repo";"/var/lib/lxc"];;
+  let cvmfs_location = List.map ~f:Filename.parts [
+    "/cvmfs/ripley.repo";
+    "/cvmfs/hgi.repo";
+    "/var/lib/lxc"
+  ];;
 
   let file_test test file msg = match (test file) with
   | `Yes -> Ok ()
@@ -106,7 +118,7 @@ module Configure = struct
   (* 3. Set up auto-boot into a console for the user. *)
   (* 4. Scramble the root password? *)
 
-  let configure_container template mountpoints =
+  let configure_container template =
     let open Result in
     let open Result.Monad_infix in
     let open Pipe_infix in
@@ -133,7 +145,11 @@ module Configure = struct
     let repoint_config () =
       let config_file = mount_loc^"/config" in
       let esc = unstage (String.Escaping.escape ['/'] '\\') in
-      Shell.exec_wait "sed" ["-i";"s/"^(esc template)^"/"^(esc mount_loc)^"/"; config_file] |>
+      Shell.exec_wait "sed" [
+        "-i";
+        "s/"^(esc Config.container_root_directory)^"/"^(esc mount_loc)^"/"; 
+        config_file
+      ] |>
       map_error ~f:(fun _ -> "Unable to repoint config file.") 
     in
     let add_user () = 
@@ -159,7 +175,11 @@ module Configure = struct
       map_error ~f:(fun _ -> "Unable to add user.") 
     in
     let add_auto_boot username = 
-      let status = Shell.exec_wait "sed" ["-i";"s/thetis/"^username^"/";console_login_file] in
+      let status = Shell.exec_wait "sed" [
+        "-i";
+        "s/"^Config.container_user_name^"/"^username^"/";
+        console_login_file
+      ] in
       map_error status ~f:(fun _ -> "Unable to set up auto-boot.") 
     in
     create_locations () >>= fun _ ->
@@ -172,46 +192,36 @@ module Configure = struct
 end
 
 
-(* Some temporary variables which will eventually be passed in in some way. *)
-let template_loc = "/var/lib/lxc/archibald";;
-let mountpoints = Common.([
-  { 
-    device = "/tmp/foo";
-    directory = "/tmp/foo";
-    fstype = "none";
-    opts = ["bind"];
-  }
-])
-
-
-(*
-Program proper.
-*)
-let usage () =
-  print_string "Usage: hg-deploy foo bar baz"
-;;
-
-let () =
-if euid = 0 then begin
-  print_string ("UID "^(Int.to_string realuid)^"\n");
-  print_string ("EUID "^(Int.to_string euid)^"\n");
-  print_string ("Login: "^getlogin ()^"\n");
-  Random.init (Float.to_int (time ()));
-  setuid 0;
-  let open Result.Monad_infix in
-  let status = 
-    Verify.check_template template_loc >>= fun _ ->
-    Configure.configure_container template_loc mountpoints
-  in
-  match status with
-  | Ok _ -> exit 0
-  | Error err -> begin
-    output_string (out_channel_of_descr stderr) (err^"\n");
-    exit 1
-  end
-end 
+let deploy template_loc = 
+  if euid = 0 then begin
+    print_string ("UID "^(Int.to_string realuid)^"\n");
+    print_string ("EUID "^(Int.to_string euid)^"\n");
+    print_string ("Login: "^getlogin ()^"\n");
+    Random.init (Float.to_int (time ()));
+    setuid 0;
+    let open Result.Monad_infix in
+    let status = 
+      Verify.check_template template_loc >>= fun _ ->
+      Configure.configure_container template_loc
+    in
+    match status with
+    | Ok _ -> exit 0
+    | Error err -> begin
+      output_string (out_channel_of_descr stderr) (err^"\n");
+      exit 1
+    end
+  end 
 else begin
   output_string (out_channel_of_descr stderr) "Must be run as suid root.\n";
   exit 1
 end
+;;
+
+let usage = "usage: hg-deploy template"
+
+(* Currently there are no options really *)
+let speclist = []
+
+let () =
+Arg.parse speclist (fun x -> deploy x) usage
 ;;
