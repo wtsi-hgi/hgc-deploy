@@ -1,16 +1,37 @@
+open Core.Std
+open Hgc_util
+open Sys
+open Unix
+
 module type Config = sig
 
   (* Where to use for the union filesystem. *)
-  val aufs_union_loc : string;
+  val aufs_union_loc : string
   (* Where to stash changes to the union fs. *)
-  val aufs_rw_loc : string; 
+  val aufs_rw_loc : string
+  (* Path inside the container to bind mount resources. *)
+  val container_mount_loc : string
 
 end
 
 module type S = sig
 
-  val aufs_union_loc : string;
-  val aufs_rw_loc : string; 
+  (*  Mountpoint type.  *)
+  type mountpoint
+
+  (*    Configuration for a container.    *)
+  type config
+
+  (* Configured container type *)
+  type t
+
+  (* Create the specified container and execute a given function in its context, ensuring that it's
+    closed properly afterwards. *)
+val inContainer : config -> f:(t -> 'a) -> ('a, string) Result.t
+
+end
+
+module Make(C : Config) : S = struct
 
   (*  Mountpoint type.  *)
   type mountpoint = {
@@ -34,14 +55,6 @@ module type S = sig
     rootfs_path : string;
     resources : string list;
   }
-
-  (* Create the specified container and execute a given function in its context, ensuring that it's
-    closed properly afterwards. *)
-val inContainer : config -> (t -> 'a) -> 'a 
-
-end
-
-module Make(C : Config) : S = struct
 
   (* Private methods *)
   (* Build the overlay mount *)
@@ -70,8 +83,8 @@ module Make(C : Config) : S = struct
       "-o"^opts
     ] in
     res.Shell.Result.status |> 
-    map_error ~f:err_msg |>
-    map ~f:(fun _ -> mountpoint.directory)
+    map ~f:(fun _ -> mountpoint.directory) |>
+    map_error ~f:(fun _ -> err_msg res)
   ;;
 
   (* Create a clone of the specified container. *)
@@ -89,11 +102,33 @@ module Make(C : Config) : S = struct
       mount ol
     in
     let mount_resources () =
+      conf.mountpoints |>
+      List.map ~f:(fun x -> mount x) |>
+      List.fold ~init:(return []) ~f:(fun acc x ->  
+        acc >>= fun acc' -> 
+        x >>= fun x' -> 
+        return (x' :: acc')
+        )
+    in
+    create_locations () >>= fun _ ->
+    mount_overlay () >>= fun dir ->
+    mount_resources () >>| fun dirs ->
+    {
+      aufs_union_loc = C.aufs_union_loc;
+      config_path = C.aufs_union_loc^"/config";
+      fstab_path = C.aufs_union_loc^"/fstab";
+      rootfs_path = C.aufs_union_loc^"/rootfs";
+      resources = (dir :: dirs);
+    }
+  ;;
 
-
-
-      (* Public methods *)
-      let inContainer conf f = 
-        f (clone conf)
-
-      end
+  (* Public methods *)
+  let inContainer conf ~f = 
+    let container = clone conf in
+    let result = Result.map container ~f in
+    begin
+      result  
+    end
+  ;;
+  
+end

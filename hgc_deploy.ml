@@ -8,18 +8,18 @@ open Unix;;
 
 open Hgc_util;;
 
-let realuid = getuid ()
-let euid = geteuid ()
-
 module Config = struct
 
-  (* Place holder for root directory - will be placed.*)
-  let container_root_directory = "/var/lib/lxc/archibald"
-  (* Place holder for user name - will be replaced. *)
-  let container_user_name = "thetis"
-end
+  (* This stuff cannot be changed. *)
+  let realuid = getuid ()
+  let euid = geteuid ()
 
-module Common = struct 
+  let container_mount_location = "/mnt"
+
+  (* Place holder for root directory - will be replaced in LXC config.*)
+  let container_root_directory = "/var/lib/lxc/archibald"
+  (* Place holder for user name - will be replaced in container init. *)
+  let container_user_name = "thetis"
 
   type mountpoint = {
     device : string;
@@ -28,7 +28,20 @@ module Common = struct
     opts : string list;
   }
 
+  let resources = ref []
+
+  let addResource path = resources := (
+    {
+      device = path;
+      directory = container_mount_location^"/"^(Filename.basename path);
+      fstype = "none";
+      opts = ["-o bind"];
+    }
+  ) :: !resources
+
+
 end
+
 
 (*
 Tools to verify that a container is:
@@ -49,8 +62,6 @@ through maintaining a specific list somewhere.
 val check_template : string -> (unit, string) Result.t
 
 end = struct
-
-  include Common
 
   (* Allowed locations for CVMFS images *)
   let cvmfs_location = List.map ~f:Filename.parts [
@@ -96,7 +107,7 @@ Tools for configuring a module.
 *)
 module Configure = struct
 
-  include Common
+  include Config
 
   let mount_loc = (getenv_exn "HOME")^"/cvmfs"
 
@@ -117,7 +128,6 @@ module Configure = struct
   (* 2. Add the user into /etc/passwd. *)
   (* 3. Set up auto-boot into a console for the user. *)
   (* 4. Scramble the root password? *)
-
   let configure_container template =
     let open Result in
     let open Result.Monad_infix in
@@ -153,7 +163,7 @@ module Configure = struct
       map_error ~f:(fun _ -> "Unable to repoint config file.") 
     in
     let add_user () = 
-      let login = (Passwd.getbyuid_exn realuid) in
+      let login = (Passwd.getbyuid_exn Config.realuid) in
       let gen_passwd pwd_t = Passwd.(Printf.sprintf 
         "%s:%s:%d:%d:%s:%s:%s\n" pwd_t.name pwd_t.passwd 
         pwd_t.uid pwd_t.gid pwd_t.gecos pwd_t.dir pwd_t.shell) in
@@ -188,14 +198,12 @@ module Configure = struct
     add_user () >>= fun name ->
     add_auto_boot name
   ;;
-
 end
 
-
 let deploy template_loc = 
-  if euid = 0 then begin
-    print_string ("UID "^(Int.to_string realuid)^"\n");
-    print_string ("EUID "^(Int.to_string euid)^"\n");
+  if Config.euid = 0 then begin
+    print_string ("UID "^(Int.to_string Config.realuid)^"\n");
+    print_string ("EUID "^(Int.to_string Config.euid)^"\n");
     print_string ("Login: "^getlogin ()^"\n");
     Random.init (Float.to_int (time ()));
     setuid 0;
@@ -217,10 +225,12 @@ else begin
 end
 ;;
 
-let usage = "usage: hg-deploy template"
+let usage = "usage: hg-deploy template [-r resource]*"
 
 (* Currently there are no options really *)
-let speclist = []
+let speclist = [
+  ("-r", Arg.String (fun r -> Config.addResource r), ": specify resource to stage in.")
+]
 
 let () =
 Arg.parse speclist (fun x -> deploy x) usage
