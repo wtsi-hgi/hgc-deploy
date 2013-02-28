@@ -8,37 +8,43 @@ open Unix;;
 
 open Hgc_util;;
 
-module Config = struct
+(* This stuff cannot be changed. *)
+let realuid = getuid ()
+let euid = geteuid ()
 
-  (* This stuff cannot be changed. *)
-  let realuid = getuid ()
-  let euid = geteuid ()
+module ContainerConfig : Hgc_container.Config = struct
 
-  let container_mount_location = "/mnt"
+  let aufs_union_loc = (getenv_exn "HOME")^"/cvmfs"
+  let aufs_rw_loc = "/tmp/hgc/overlay"
+  let container_mount_loc = "/mnt"
+
+end
+
+module Container = Hgc_container.Make(ContainerConfig)
+
+module InstanceConfig = struct
+
+  open Container
 
   (* Place holder for root directory - will be replaced in LXC config.*)
   let container_root_directory = "/var/lib/lxc/archibald"
   (* Place holder for user name - will be replaced in container init. *)
   let container_user_name = "thetis"
 
-  type mountpoint = {
-    device : string;
-    directory : string;
-    fstype : string;
-    opts : string list;
-  }
+  let console_login_file = 
+    ContainerConfig.aufs_union_loc ^ "/rootfs/etc/systemd/system/console-autologin.service"
+  ;;
 
   let resources = ref []
 
   let addResource path = resources := (
-    {
-      device = path;
-      directory = container_mount_location^"/"^(Filename.basename path);
-      fstype = "none";
-      opts = ["-o bind"];
-    }
+  {
+    device = path;
+    directory = ContainerConfig.container_mount_loc^"/"^(Filename.basename path);
+    fstype = "none";
+    opts = ["-o bind"];
+  }
   ) :: !resources
-
 
 end
 
@@ -107,20 +113,8 @@ Tools for configuring a module.
 *)
 module Configure = struct
 
-  include Config
-
-  let mount_loc = (getenv_exn "HOME")^"/cvmfs"
-
-  let console_login_file = 
-    mount_loc ^ "/rootfs/etc/systemd/system/console-autologin.service"
-  ;;
-
-  let overlay_location template tmp_loc= {
-    device = "none";
-    directory = mount_loc;
-    fstype = "aufs";
-    opts = [Printf.sprintf "dirs=%s:%s" tmp_loc template]
-  }
+  open ContainerConfig
+  open InstanceConfig
 
   (*  Configure the container in various ways: *)
   (* 1. Overlay the AUFS image. *)
@@ -132,38 +126,18 @@ module Configure = struct
     let open Result in
     let open Result.Monad_infix in
     let open Pipe_infix in
-    let tmp_loc = "/tmp/hgc/overlay_"^(string_of_int (Random.bits ())) in
-    let create_locations () = 
-      map_error (try_with (fun _ -> mkdir_p tmp_loc)) Exn.to_string >>= fun _ ->
-      map_error (try_with (fun _ -> mkdir_p mount_loc)) Exn.to_string
-    in
-    let mount_succ () =
-      let ol = overlay_location template tmp_loc in
-      let mount_opts = (List.fold ol.opts ~init:"" ~f:(fun x y -> x ^ y)) in
-      let res = Shell.run "mount" ["-t"^ol.fstype;
-      ol.device;
-      ol.directory;
-      "-o"^mount_opts] in
-      map_error res.Shell.Result.status (fun _ -> "Unable to mount device :\n"^
-        ol.device^"\n"^
-        ol.directory^"\n"^
-        ol.fstype^"\n"^
-        mount_opts^"\n"^
-        res.Shell.Result.stderr
-        ) 
-    in
     let repoint_config () =
-      let config_file = mount_loc^"/config" in
+      let config_file = aufs_union_loc^"/config" in
       let esc = unstage (String.Escaping.escape ['/'] '\\') in
       Shell.exec_wait "sed" [
         "-i";
-        "s/"^(esc Config.container_root_directory)^"/"^(esc mount_loc)^"/"; 
+        "s/"^(esc container_root_directory)^"/"^(esc aufs_union_loc)^"/"; 
         config_file
       ] |>
       map_error ~f:(fun _ -> "Unable to repoint config file.") 
     in
     let add_user () = 
-      let login = (Passwd.getbyuid_exn Config.realuid) in
+      let login = (Passwd.getbyuid_exn realuid) in
       let gen_passwd pwd_t = Passwd.(Printf.sprintf 
         "%s:%s:%d:%d:%s:%s:%s\n" pwd_t.name pwd_t.passwd 
         pwd_t.uid pwd_t.gid pwd_t.gecos pwd_t.dir pwd_t.shell) in
@@ -171,15 +145,15 @@ module Configure = struct
         "%s:%s:%d:%d:%d:%d:::\n" pwd_t.name "*" 
         ((Float.to_int (time ())) / 86400) 0 99999 7) in
       (try_with 
-        (fun _ -> Out_channel.with_file ~append:true (mount_loc^"/rootfs/etc/passwd") 
+        (fun _ -> Out_channel.with_file ~append:true (aufs_union_loc^"/rootfs/etc/passwd") 
           ~f:(fun t -> Out_channel.output_string t (gen_passwd login))) |>
         map_error ~f:Exn.to_string) >>= fun _ -> 
       (try_with 
-        (fun _ -> Out_channel.with_file ~append:true (mount_loc^"/rootfs/etc/shadow") 
+        (fun _ -> Out_channel.with_file ~append:true (aufs_union_loc^"/rootfs/etc/shadow") 
           ~f:(fun t -> Out_channel.output_string t (gen_shadow login))) |>
         map_error ~f:Exn.to_string) >>= fun _ ->
       (try_with 
-        (fun _ -> mkdir_p (mount_loc^"/rootfs/home/"^login.Passwd.name)) |>
+        (fun _ -> mkdir_p (aufs_union_loc^"/rootfs/home/"^login.Passwd.name)) |>
         map_error ~f:Exn.to_string) |>
       map ~f:(fun _ -> login.Passwd.name) |> 
       map_error ~f:(fun _ -> "Unable to add user.") 
@@ -187,13 +161,11 @@ module Configure = struct
     let add_auto_boot username = 
       let status = Shell.exec_wait "sed" [
         "-i";
-        "s/"^Config.container_user_name^"/"^username^"/";
+        "s/"^container_user_name^"/"^username^"/";
         console_login_file
       ] in
       map_error status ~f:(fun _ -> "Unable to set up auto-boot.") 
     in
-    create_locations () >>= fun _ ->
-    mount_succ () >>= fun _ ->
     repoint_config () >>= fun _ ->
     add_user () >>= fun name ->
     add_auto_boot name
@@ -201,9 +173,9 @@ module Configure = struct
 end
 
 let deploy template_loc = 
-  if Config.euid = 0 then begin
-    print_string ("UID "^(Int.to_string Config.realuid)^"\n");
-    print_string ("EUID "^(Int.to_string Config.euid)^"\n");
+  if euid = 0 then begin
+    print_string ("UID "^(Int.to_string realuid)^"\n");
+    print_string ("EUID "^(Int.to_string euid)^"\n");
     print_string ("Login: "^getlogin ()^"\n");
     Random.init (Float.to_int (time ()));
     setuid 0;
@@ -229,7 +201,7 @@ let usage = "usage: hg-deploy template [-r resource]*"
 
 (* Currently there are no options really *)
 let speclist = [
-  ("-r", Arg.String (fun r -> Config.addResource r), ": specify resource to stage in.")
+  ("-r", Arg.String (fun r -> InstanceConfig.addResource r), ": specify resource to stage in.")
 ]
 
 let () =
