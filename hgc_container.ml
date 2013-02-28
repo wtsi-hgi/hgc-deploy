@@ -16,9 +16,6 @@ end
 
 module type S = sig
 
-  (*  Mountpoint type.  *)
-  type mountpoint
-
   (*    Configuration for a container.    *)
   type config
 
@@ -27,25 +24,84 @@ module type S = sig
 
   (* Create the specified container and execute a given function in its context, ensuring that it's
     closed properly afterwards. *)
-val inContainer : config -> f:(t -> 'a) -> ('a, string) Result.t
+val inContainer : config -> f:(unit -> 'a) -> ('a, string) Result.t
 
 end
 
 module Make(C : Config) : S = struct
 
-  (*  Mountpoint type.  *)
-  type mountpoint = {
-    device : string;
-    directory : string;
-    fstype : string;
-    opts : string list;
-  }
+  module Mount : sig
+    
+    (*  Mountpoint type.  *)
+    type mountpoint = {
+      device : string;
+      directory : string;
+      fstype : string;
+      opts : string list;
+    }
+
+    val with_mount : mountpoint -> (unit -> 'a) -> ('a, string) Result.t
+    val with_mounts : mountpoint list -> (unit -> 'a) -> ('a, string) Result.t
+  end = struct
+
+    (*  Mountpoint type.  *)
+    type mountpoint = {
+      device : string;
+      directory : string;
+      fstype : string;
+      opts : string list;
+    }
+
+    (* Hide this function *)
+    (* Mount the specified point - returns a Result containing the directory name. *)
+    let mount mountpoint =
+      let open Result in
+      let open Hgc_util.Pipe_infix in
+      let opts = (List.fold mountpoint.opts ~init:"" ~f:(fun x y -> x ^ y)) in
+      let err_msg result = "Unable to mount device :\n"^
+      mountpoint.device^"\n"^
+      mountpoint.directory^"\n"^
+      mountpoint.fstype^"\n"^
+      opts^"\n"^
+      result.Shell.Result.stderr in
+      let res = Shell.run "mount" [
+        "-t"^mountpoint.fstype;
+        mountpoint.device;
+        mountpoint.directory;
+        "-o"^opts
+      ] in
+      res.Shell.Result.status |> 
+      map ~f:(fun _ -> mountpoint.directory) |>
+      map_error ~f:(fun _ -> err_msg res)
+    ;;
+
+    let unmount dir =
+      Shell.run "umount" [dir]
+    ;;
+
+    let with_mount mountpoint f = match mount mountpoint with
+    | Ok dir -> let result = f () in
+    begin
+      unmount dir;
+      Ok result
+    end
+    | Error a -> Error a
+
+    let with_mounts mountpoints f =
+      let open Result in
+      let f' = List.fold mountpoints ~init:f ~f:(fun acc x -> match with_mount x acc with
+        | Ok x' -> (fun () -> x')
+        | _ -> acc) in
+      return (f' ())
+    ;;
+
+  end
 
   (*    Configuration for a container.    *)
   type config = {
     container_name : string;
     template_location : string;
-    mountpoints : mountpoint list;
+    mountpoints : Mount.mountpoint list;
   }
 
   type t = {
@@ -53,42 +109,19 @@ module Make(C : Config) : S = struct
     config_path : string;
     fstab_path : string;
     rootfs_path : string;
-    resources : string list;
   }
 
   (* Private methods *)
   (* Build the overlay mount *)
-  let overlay_location template tmp_loc= {
+  let overlay_location template tmp_loc= Mount.({
     device = "none";
     directory = C.aufs_union_loc;
     fstype = "aufs";
     opts = [Printf.sprintf "dirs=%s:%s" tmp_loc template]
-  }
+  })
 
-  (* Mount the specified point - returns a Result containing the directory name. *)
-  let mount mountpoint =
-    let open Result in
-    let open Hgc_util.Pipe_infix in
-    let opts = (List.fold mountpoint.opts ~init:"" ~f:(fun x y -> x ^ y)) in
-    let err_msg result = "Unable to mount device :\n"^
-    mountpoint.device^"\n"^
-    mountpoint.directory^"\n"^
-    mountpoint.fstype^"\n"^
-    opts^"\n"^
-    result.Shell.Result.stderr in
-    let res = Shell.run "mount" [
-      "-t"^mountpoint.fstype;
-      mountpoint.device;
-      mountpoint.directory;
-      "-o"^opts
-    ] in
-    res.Shell.Result.status |> 
-    map ~f:(fun _ -> mountpoint.directory) |>
-    map_error ~f:(fun _ -> err_msg res)
-  ;;
-
-  (* Create a clone of the specified container. *)
-  let clone conf = 
+  (* Public methods *)
+  let inContainer conf ~f = 
     let open Result in
     let open Result.Monad_infix in
     let open Hgc_util.Pipe_infix in
@@ -97,38 +130,16 @@ module Make(C : Config) : S = struct
       map_error (try_with (fun _ -> mkdir_p tmp_loc)) Exn.to_string >>= fun _ ->
       map_error (try_with (fun _ -> mkdir_p C.aufs_union_loc)) Exn.to_string
     in
-    let mount_overlay () =
+    let with_overlay x =
       let ol = overlay_location conf.template_location tmp_loc in
-      mount ol
+      Mount.with_mount ol x
     in
-    let mount_resources () =
-      conf.mountpoints |>
-      List.map ~f:(fun x -> mount x) |>
-      List.fold ~init:(return []) ~f:(fun acc x ->  
-        acc >>= fun acc' -> 
-        x >>= fun x' -> 
-        return (x' :: acc')
-        )
+    let with_resources x =
+      Mount.with_mounts conf.mountpoints x
     in
     create_locations () >>= fun _ ->
-    mount_overlay () >>= fun dir ->
-    mount_resources () >>| fun dirs ->
-    {
-      aufs_union_loc = C.aufs_union_loc;
-      config_path = C.aufs_union_loc^"/config";
-      fstab_path = C.aufs_union_loc^"/fstab";
-      rootfs_path = C.aufs_union_loc^"/rootfs";
-      resources = (dir :: dirs);
-    }
+    with_overlay (fun () -> with_resources f) >>= fun res ->
+    res
   ;;
 
-  (* Public methods *)
-  let inContainer conf ~f = 
-    let container = clone conf in
-    let result = Result.map container ~f in
-    begin
-      result  
-    end
-  ;;
-  
 end
