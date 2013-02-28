@@ -46,4 +46,8 @@ module Shell = struct
     (run command args).Result.status 
   ;;
 
+  let fork_exec command args =
+    waitpid (fork_exec command ("command"::args) ())
+  ;;
+
 end

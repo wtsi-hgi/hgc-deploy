@@ -32,7 +32,7 @@ module type S = sig
 
   (* Create the specified container and execute a given function in its context, 
     ensuring that it's closed properly afterwards. *)
-val inContainer : config -> f:(unit -> 'a) -> ('a, string) Result.t
+val in_container : config -> f:(unit -> 'a) -> ('a, string) Result.t
 
 end
 
@@ -56,6 +56,7 @@ module Make(C : Config) : S = struct
 
    val with_mount : mountpoint -> (unit -> 'a) -> ('a, string) Result.t
    val with_mounts : mountpoint list -> (unit -> 'a) -> ('a, string) Result.t
+
  end = struct
 
   (* Hide this function *)
@@ -113,7 +114,7 @@ let overlay_location template tmp_loc= Mount.({
 })
 
 (* Public methods *)
-let inContainer conf ~f = 
+let in_container conf ~f = 
   let open Result in
   let open Result.Monad_infix in
   let open Hgc_util.Pipe_infix in

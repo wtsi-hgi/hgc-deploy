@@ -24,20 +24,18 @@ module Container = Hgc_container.Make(ContainerConfig)
 
 module InstanceConfig = struct
 
-  open Container
-
   (* Place holder for root directory - will be replaced in LXC config.*)
   let container_root_directory = "/var/lib/lxc/archibald"
   (* Place holder for user name - will be replaced in container init. *)
   let container_user_name = "thetis"
 
   let console_login_file = 
-    ContainerConfig.aufs_union_loc ^ "/rootfs/etc/systemd/system/console-autologin.service"
+    ContainerConfig.aufs_union_loc ^ "/rootfs/etc/systemd/system/console-getty.service"
   ;;
 
   let resources = ref []
 
-  let addResource path = resources := (
+  let addResource path = resources := Container.(
   {
     device = path;
     directory = ContainerConfig.container_mount_loc^"/"^(Filename.basename path);
@@ -122,7 +120,7 @@ module Configure = struct
   (* 2. Add the user into /etc/passwd. *)
   (* 3. Set up auto-boot into a console for the user. *)
   (* 4. Scramble the root password? *)
-  let configure_container template =
+  let configure_container () =
     let open Result in
     let open Result.Monad_infix in
     let open Pipe_infix in
@@ -180,9 +178,22 @@ let deploy template_loc =
     Random.init (Float.to_int (time ()));
     setuid 0;
     let open Result.Monad_infix in
+    let container_desc = Container.({
+      container_name = "archibald";
+      template_location = template_loc;
+      mountpoints = !InstanceConfig.resources; 
+    }) in
     let status = 
       Verify.check_template template_loc >>= fun _ ->
-      Configure.configure_container template_loc
+      Container.in_container container_desc (fun () ->
+        begin
+          Configure.configure_container ();
+          Shell.fork_exec "lxc-start" [
+            "-n";container_desc.Container.container_name;
+            "-f";ContainerConfig.aufs_union_loc^"/config";
+          ]
+        end
+      )
     in
     match status with
     | Ok _ -> exit 0
