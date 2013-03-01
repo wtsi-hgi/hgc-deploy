@@ -38,7 +38,7 @@ module InstanceConfig = struct
   {
     device = path;
     directory = ContainerConfig.(
-      aufs_union_loc^container_mount_loc^"/"^(Filename.basename path));
+      aufs_union_loc^"/rootfs/"^container_mount_loc^"/"^(Filename.basename path));
     fstype = "none";
     opts = ["bind"];
   }
@@ -114,6 +114,32 @@ module Configure = struct
   open ContainerConfig
   open InstanceConfig
 
+  let ensure_mp_created mp = 
+    let open Result in 
+    let open Result.Monad_infix in 
+    let open Hgc_util.Pipe_infix in
+    let open Container in 
+    match Sys.file_exists mp.directory with
+    | `Yes -> Ok ()
+    | `Unknown -> Error "Cannot determine status of file."
+    | `No -> match Sys.is_file mp.device with
+    | `Yes -> map_error (try_with (fun _ -> mkdir_p (Filename.dirname mp.directory))) 
+    Exn.to_string >>= fun _ -> 
+    map_error (Shell.exec_wait "touch" [mp.directory]) (fun _ -> 
+      "Failed to touch "^mp.directory^".\n")
+    | `No -> map_error (try_with (fun _ -> mkdir_p mp.directory)) Exn.to_string
+    | `Unknown -> Error "Cannot determine status of mount point."
+  ;;
+
+  let append fname output = 
+    let open Hgc_util.Pipe_infix in
+    let open Result in 
+    (try_with 
+      (fun _ -> Out_channel.with_file ~append:true fname
+        ~f:(fun t -> Out_channel.output_string t output)) |>
+      map_error ~f:Exn.to_string)
+  ;;
+
   (*  Configure the container in various ways: *)
   (* 1. Overlay the AUFS image. *)
   (* 1.5. Modify the config to point to the overlaid rootfs. *)
@@ -142,14 +168,8 @@ module Configure = struct
       let gen_shadow pwd_t = Passwd.(Printf.sprintf 
         "%s:%s:%d:%d:%d:%d:::\n" pwd_t.name "*" 
         ((Float.to_int (time ())) / 86400) 0 99999 7) in
-      (try_with 
-        (fun _ -> Out_channel.with_file ~append:true (aufs_union_loc^"/rootfs/etc/passwd") 
-          ~f:(fun t -> Out_channel.output_string t (gen_passwd login))) |>
-        map_error ~f:Exn.to_string) >>= fun _ -> 
-      (try_with 
-        (fun _ -> Out_channel.with_file ~append:true (aufs_union_loc^"/rootfs/etc/shadow") 
-          ~f:(fun t -> Out_channel.output_string t (gen_shadow login))) |>
-        map_error ~f:Exn.to_string) >>= fun _ ->
+      append (aufs_union_loc^"/rootfs/etc/passwd") (gen_passwd login) >>= fun _ -> 
+      append (aufs_union_loc^"/rootfs/etc/shadow") (gen_shadow login) >>= fun _ ->
       (try_with 
         (fun _ -> mkdir_p (aufs_union_loc^"/rootfs/home/"^login.Passwd.name)) |>
         map_error ~f:Exn.to_string) |>
@@ -164,8 +184,23 @@ module Configure = struct
       ] in
       map_error status ~f:(fun _ -> "Unable to set up auto-boot.") 
     in
+    let add_mounts () = 
+      let fstab = aufs_union_loc^"/fstab" in
+      let fstab_entry x = Container.(Printf.sprintf
+        "%s\t%s\t%s\t%s\t%d\t%d\n" (Filename.realpath x.device) x.directory 
+        x.fstype (Option.value 
+          (List.reduce x.opts ~f:(fun a b -> a^","^b))
+          ~default:"")
+        0 0) in
+      List.fold !resources ~init: (return ()) 
+      ~f:(fun acc x ->
+        acc >>= fun _ -> ensure_mp_created x >>= fun _ ->
+        append fstab (fstab_entry x)
+        )
+    in
     repoint_config () >>= fun _ ->
     add_user () >>= fun name ->
+    add_mounts () >>= fun _ ->
     add_auto_boot name
   ;;
 end
@@ -197,7 +232,7 @@ let deploy template_loc =
             "-f";ContainerConfig.aufs_union_loc^"/config";
           ]
         end
-      )
+        )
     in
     match status with
     | Ok _ -> exit 0

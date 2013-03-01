@@ -59,26 +59,6 @@ module Make(C : Config) : S = struct
 
  end = struct
 
-  let file_test test file msg = match (test file) with
-  | `Yes -> Ok ()
-  | `Unknown -> Error ("Cannot determine status of required file: "^file^"\n")
-  | `No -> Error msg
-
-  let ensure_created mp = 
-    let open Result in 
-    let open Monad_infix in 
-    match Sys.file_exists mp.directory with
-    | `Yes -> Ok ()
-    | `Unknown -> Error "Cannot determine status of file."
-    | `No -> match Sys.is_file mp.device with
-    | `Yes -> map_error (try_with (fun _ -> mkdir_p (Filename.dirname mp.directory))) 
-    Exn.to_string >>= fun _ -> 
-    map_error (Shell.exec_wait "touch" [mp.directory]) (fun _ -> 
-      "Failed to touch "^mp.directory^".\n")
-    | `No -> map_error (try_with (fun _ -> mkdir_p mp.directory)) Exn.to_string
-    | `Unknown -> Error "Cannot determine status of mount point."
-  ;;
-
   (* Hide this function *)
   (* Mount the specified point - returns a Result containing the directory name. *)
   let mount mountpoint =
@@ -92,7 +72,7 @@ module Make(C : Config) : S = struct
     mountpoint.fstype^"\n"^
     opts^"\n"^
     result.Shell.Result.stderr in
-    let exec_mount () = 
+    let res = 
       Shell.run "mount" [
         "-t"^mountpoint.fstype;
         mountpoint.device;
@@ -100,8 +80,6 @@ module Make(C : Config) : S = struct
         "-o"^opts
       ] 
     in
-    ensure_created mountpoint >>= fun _ ->
-    let res = (exec_mount ()) in
     res.Shell.Result.status |> 
     map ~f:(fun _ -> mountpoint.directory) |>
     map_error ~f:(fun _ -> err_msg res)
@@ -155,12 +133,8 @@ let in_container conf ~f =
     let ol = overlay_location conf.template_location tmp_loc in
     Mount.with_mount ol x
   in
-  let with_resources x =
-    Mount.with_mounts conf.mountpoints x
-  in
   create_locations () >>= fun _ ->
-  with_overlay (fun () -> with_resources f) >>= fun res ->
-  res
+  with_overlay f
 ;;
 
 end
