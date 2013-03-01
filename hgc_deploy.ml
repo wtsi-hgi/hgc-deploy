@@ -192,10 +192,10 @@ let deploy template_loc =
       Container.in_container container_desc (fun () ->
         begin
           Configure.configure_container ();
- (*          Shell.fork_exec "lxc-start" [
+          Shell.fork_exec "lxc-start" [
             "-n";container_desc.Container.container_name;
             "-f";ContainerConfig.aufs_union_loc^"/config";
-          ] *)
+          ]
         end
       )
     in
