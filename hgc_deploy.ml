@@ -1,7 +1,6 @@
 (*
 Program to control the deployment of a Mercury container onto a machine.
 *)
-
 open Core.Std;;
 open Sys;;
 open Unix;;
@@ -38,9 +37,10 @@ module InstanceConfig = struct
   let addResource path = resources := Container.(
   {
     device = path;
-    directory = ContainerConfig.container_mount_loc^"/"^(Filename.basename path);
+    directory = ContainerConfig.(
+      aufs_union_loc^container_mount_loc^"/"^(Filename.basename path));
     fstype = "none";
-    opts = ["-o bind"];
+    opts = ["bind"];
   }
   ) :: !resources
 
@@ -175,6 +175,10 @@ let deploy template_loc =
     print_string ("UID "^(Int.to_string realuid)^"\n");
     print_string ("EUID "^(Int.to_string euid)^"\n");
     print_string ("Login: "^getlogin ()^"\n");
+    print_string ("Resources: "^(
+      List.fold ~init:"" !InstanceConfig.resources 
+      ~f:(fun x a -> x^"\n\t"^a.Container.directory))^"\n"
+    );
     Random.init (Float.to_int (time ()));
     setuid 0;
     let open Result.Monad_infix in
@@ -188,10 +192,10 @@ let deploy template_loc =
       Container.in_container container_desc (fun () ->
         begin
           Configure.configure_container ();
-          Shell.fork_exec "lxc-start" [
+ (*          Shell.fork_exec "lxc-start" [
             "-n";container_desc.Container.container_name;
             "-f";ContainerConfig.aufs_union_loc^"/config";
-          ]
+          ] *)
         end
       )
     in

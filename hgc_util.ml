@@ -47,7 +47,7 @@ module Shell = struct
   ;;
 
   let fork_exec command args =
-    waitpid (fork_exec command ("command"::args) ())
+    waitpid (fork_exec command (command::args) ())
   ;;
 
 end
