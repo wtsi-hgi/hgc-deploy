@@ -37,15 +37,18 @@ module InstanceConfig = struct
 
   let resources = ref []
 
-  let addResource path = resources := Container.(
-  {
-    device = path;
-    directory = ContainerConfig.(
-      aufs_union_loc^"/rootfs/"^container_mount_loc^"/"^(Filename.basename path));
-    fstype = "none";
-    opts = ["bind"];
-  }
-  ) :: !resources
+  let add_resource path = resources := (path :: !resources)
+
+  let get_resources container_loc = List.map !resources (fun r ->
+    Container.(
+    {
+      device = r;
+      directory = ContainerConfig.(
+        container_loc^"/rootfs/"^container_mount_loc^"/"^(Filename.basename r));
+      fstype = "none";
+      opts = ["bind"];
+    }))
+  ;;
 
 end
 
@@ -205,7 +208,7 @@ module Configure = struct
           (List.reduce x.opts ~f:(fun a b -> a^","^b))
           ~default:"")
         0 0) in
-      List.fold !resources ~init: (return ()) 
+      List.fold (InstanceConfig.get_resources container_loc) ~init: (return ()) 
       ~f:(fun acc x ->
         acc >>= fun _ -> ensure_mp_created x >>= fun _ ->
         append fstab (fstab_entry x)
@@ -224,10 +227,6 @@ let deploy template_loc =
     print_string ("UID "^(Int.to_string realuid)^"\n");
     print_string ("EUID "^(Int.to_string euid)^"\n");
     print_string ("Login: "^reallogin^"\n");
-    print_string ("Resources: "^(
-      List.fold ~init:"" !InstanceConfig.resources 
-      ~f:(fun x a -> x^"\n\t"^a.Container.directory))^"\n"
-    );
     Random.init (Float.to_int (time ()));
     setuid 0;
     let open Result.Monad_infix in
@@ -241,7 +240,7 @@ let deploy template_loc =
       container_name = container_instance_name;
       container_loc = container_loc;
       template_location = template_loc;
-      mountpoints = !InstanceConfig.resources; 
+      mountpoints = InstanceConfig.get_resources container_loc; 
     }) in
     let status = 
       Verify.check_template template_loc >>= fun _ ->
@@ -272,7 +271,7 @@ let usage = "usage: hg-deploy template [-r resource]*"
 
 (* Currently there are no options really *)
 let speclist = [
-  ("-r", Arg.String (fun r -> InstanceConfig.addResource r), ": specify resource to stage in.")
+  ("-r", Arg.String (fun r -> InstanceConfig.add_resource r), ": specify resource to stage in.")
 ]
 
 let () =
