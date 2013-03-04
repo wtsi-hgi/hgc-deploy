@@ -10,10 +10,11 @@ open Hgc_util;;
 (* This stuff cannot be changed. *)
 let realuid = getuid ()
 let euid = geteuid ()
+let reallogin = getlogin ()
 
 module ContainerConfig : Hgc_container.Config = struct
 
-  let aufs_union_loc = (getenv_exn "HOME")^"/cvmfs"
+  let aufs_union_loc = "/tmp/hgc/image"
   let aufs_rw_loc = "/tmp/hgc/overlay"
   let container_mount_loc = "/mnt"
 
@@ -30,8 +31,8 @@ module InstanceConfig = struct
   (* Place holder for container base name - will be replaced in init. *)
   let container_base_name = "archibald"
 
-  let console_login_file = 
-    ContainerConfig.aufs_union_loc ^ "/rootfs/etc/systemd/system/console-getty.service"
+  let console_login_file container_loc = 
+    container_loc ^ "/rootfs/etc/systemd/system/console-getty.service"
   ;;
 
   let resources = ref []
@@ -148,16 +149,16 @@ module Configure = struct
   (* 2. Add the user into /etc/passwd. *)
   (* 3. Set up auto-boot into a console for the user. *)
   (* 4. Scramble the root password? *)
-  let configure_container () =
+  let configure_container container_instance_name container_loc =
     let open Result in
     let open Result.Monad_infix in
     let open Pipe_infix in
     let repoint_config () =
-      let config_file = aufs_union_loc^"/config" in
+      let config_file = container_loc^"/config" in
       let esc = unstage (String.Escaping.escape ['/'] '\\') in
       Shell.fork_wait "sed" [
         "-i";
-        "s/"^(esc container_root_directory)^"/"^(esc aufs_union_loc)^"/"; 
+        "s/"^(esc container_root_directory)^"/"^(esc container_loc)^"/"; 
         config_file
       ] |>
       map_error ~f:(fun _ -> "Unable to repoint config file.") 
@@ -170,10 +171,10 @@ module Configure = struct
       let gen_shadow pwd_t = Passwd.(Printf.sprintf 
         "%s:%s:%d:%d:%d:%d:::\n" pwd_t.name "*" 
         ((Float.to_int (time ())) / 86400) 0 99999 7) in
-      append (aufs_union_loc^"/rootfs/etc/passwd") (gen_passwd login) >>= fun _ -> 
-      append (aufs_union_loc^"/rootfs/etc/shadow") (gen_shadow login) >>= fun _ ->
+      append (container_loc^"/rootfs/etc/passwd") (gen_passwd login) >>= fun _ -> 
+      append (container_loc^"/rootfs/etc/shadow") (gen_shadow login) >>= fun _ ->
       (try_with 
-        (fun _ -> mkdir_p (aufs_union_loc^"/rootfs/home/"^login.Passwd.name)) |>
+        (fun _ -> mkdir_p (container_loc^"/rootfs/home/"^login.Passwd.name)) |>
         map_error ~f:Exn.to_string) |>
       map ~f:(fun _ -> login.Passwd.name) |> 
       map_error ~f:(fun _ -> "Unable to add user.") 
@@ -182,23 +183,22 @@ module Configure = struct
       let status = Shell.fork_wait "sed" [
         "-i";
         "s/"^container_user_name^"/"^username^"/";
-        console_login_file
+        console_login_file container_loc
       ] in
       map_error status ~f:(fun _ -> "Unable to set up auto-boot.") 
     in
-    let derive_container_name username =
-      let config_file = aufs_union_loc^"/config" in
-      let newname = container_base_name^"_"^username^"_"^(Int.to_string (Random.bits ())) in
+    let derive_container_name () =
+      let config_file = container_loc^"/config" in
       let status = Shell.fork_wait "sed" [
         "-i";
-        "1 s/"^container_base_name^"/"^newname^"/";
+        "1 s/"^container_base_name^"/"^container_instance_name^"/";
         config_file
       ] in
-      map status ~f:(fun _ -> newname) |>
+      map status ~f:(fun _ -> container_instance_name) |>
       map_error ~f:(fun _ -> "Unable to derive container name.") 
     in
     let add_mounts () = 
-      let fstab = aufs_union_loc^"/fstab" in
+      let fstab = container_loc^"/fstab" in
       let fstab_entry x = Container.(Printf.sprintf
         "%s\t%s\t%s\t%s\t%d\t%d\n" (Filename.realpath x.device) x.directory 
         x.fstype (Option.value 
@@ -215,7 +215,7 @@ module Configure = struct
     add_user () >>= fun name ->
     add_mounts () >>= fun _ ->
     add_auto_boot name >>= fun _ ->
-    derive_container_name name
+    derive_container_name ()
   ;;
 end
 
@@ -223,7 +223,7 @@ let deploy template_loc =
   if euid = 0 then begin
     print_string ("UID "^(Int.to_string realuid)^"\n");
     print_string ("EUID "^(Int.to_string euid)^"\n");
-    print_string ("Login: "^getlogin ()^"\n");
+    print_string ("Login: "^reallogin^"\n");
     print_string ("Resources: "^(
       List.fold ~init:"" !InstanceConfig.resources 
       ~f:(fun x a -> x^"\n\t"^a.Container.directory))^"\n"
@@ -231,19 +231,26 @@ let deploy template_loc =
     Random.init (Float.to_int (time ()));
     setuid 0;
     let open Result.Monad_infix in
+    let container_instance_name = 
+      InstanceConfig.container_base_name
+      ^"_"^reallogin
+      ^"_"^(Int.to_string (Random.bits ()))
+    in
+    let container_loc = ContainerConfig.aufs_union_loc ^"/"^container_instance_name in
     let container_desc = Container.({
-      container_name = "archibald";
+      container_name = container_instance_name;
+      container_loc = container_loc;
       template_location = template_loc;
       mountpoints = !InstanceConfig.resources; 
     }) in
     let status = 
       Verify.check_template template_loc >>= fun _ ->
       Container.in_container container_desc (fun () ->
-        Result.map (Configure.configure_container ())
+        Result.map (Configure.configure_container container_instance_name container_loc)
         ~f:(fun name -> 
           Shell.fork_wait "lxc-start" [
             "-n";name;
-            "-f";ContainerConfig.aufs_union_loc^"/config";
+            "-f";container_loc^"/config";
           ]
           )
         )

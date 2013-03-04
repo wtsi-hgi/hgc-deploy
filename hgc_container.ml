@@ -26,6 +26,7 @@ module type S = sig
   (*    Configuration for a container.    *)
   type config = {
     container_name : string;
+    container_loc : string;
     template_location : string;
     mountpoints : mountpoint list;
   }
@@ -48,6 +49,7 @@ module Make(C : Config) : S = struct
   (*    Configuration for a container.    *)
   type config = {
     container_name : string;
+    container_loc : string;
     template_location : string;
     mountpoints : mountpoint list;
   }
@@ -112,9 +114,9 @@ end
 
 (* Private methods *)
 (* Build the overlay mount *)
-let overlay_location template tmp_loc= Mount.({
+let overlay_location union_loc template tmp_loc = Mount.({
   device = "none";
-  directory = C.aufs_union_loc;
+  directory = union_loc;
   fstype = "aufs";
   opts = [Printf.sprintf "dirs=%s:%s" tmp_loc template]
 })
@@ -124,13 +126,14 @@ let in_container conf ~f =
   let open Result in
   let open Result.Monad_infix in
   let open Hgc_util.Pipe_infix in
-  let tmp_loc = C.aufs_rw_loc^(string_of_int (Random.bits ())) in
+  let tmp_loc = C.aufs_rw_loc^"/"^conf.container_name in
+  let union_loc = conf.container_loc in
   let create_locations () = 
     map_error (try_with (fun _ -> mkdir_p tmp_loc)) Exn.to_string >>= fun _ ->
-    map_error (try_with (fun _ -> mkdir_p C.aufs_union_loc)) Exn.to_string
+    map_error (try_with (fun _ -> mkdir_p union_loc)) Exn.to_string
   in
   let with_overlay x =
-    let ol = overlay_location conf.template_location tmp_loc in
+    let ol = overlay_location union_loc conf.template_location tmp_loc in
     Mount.with_mount ol x
   in
   create_locations () >>= fun _ ->
