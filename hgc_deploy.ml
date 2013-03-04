@@ -48,7 +48,7 @@ module InstanceConfig = struct
       fstype = "none";
       opts = ["bind"];
     }))
-  ;;
+;;
 
 end
 
@@ -140,13 +140,13 @@ module Configure = struct
   let append fname output = 
     let open Hgc_util.Pipe_infix in
     let open Result in 
-    (try_with 
-      (fun _ -> Out_channel.with_file ~append:true fname
-        ~f:(fun t -> Out_channel.output_string t output)) |>
-      map_error ~f:Exn.to_string)
+    try_with (fun _ -> 
+      Out_channel.with_file ~append:true fname
+      ~f:(fun t -> Out_channel.output_string t output)) |>
+    map_error ~f:Exn.to_string
   ;;
 
-  (*  Configure the container in various ways: *)
+  (* Configure the container in various ways. *)
   (* 1. Overlay the AUFS image. *)
   (* 1.5. Modify the config to point to the overlaid rootfs and to use a user-specific name. *)
   (* 2. Add the user into /etc/passwd. *)
