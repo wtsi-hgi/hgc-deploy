@@ -19,12 +19,25 @@ module Rich_list = struct
     rev (pzip_helper l1 l2 [])
   ;;
 
+  let mk_string lst ?(first = "") ?(last = "") ~sep ~f = 
+    let flst = List.map lst ~f in 
+    match (List.reduce flst ~f:(fun a b -> (a ^ sep ^ b))) with
+    | Some a -> (first ^ a ^ last)
+    | None -> first ^ last
+  ;;
+
   include List
 end
 
 module List = Rich_list
 
 module Shell = struct
+
+  let clean_env = [
+    ("SHELL", "/bin/bash");
+    ("PATH", "/usr/local/bin:/usr/bin:/bin");
+    ("LANG", "en_GB.UTF-8");
+  ]
 
   module Result = struct
     type t = {
@@ -35,19 +48,16 @@ module Shell = struct
   end
 
   let run command args =
-    let proc = create_process command args in
+    let proc = create_process_env ~prog:command ~args ~env:(`Replace clean_env) () in
     let pid = proc.Process_info.pid in
     let out = In_channel.input_all (in_channel_of_descr proc.Process_info.stdout) in
     let err = In_channel.input_all (in_channel_of_descr proc.Process_info.stderr) in
     Result.({status = (waitpid pid); stdout = out; stderr = err})
   ;;
 
-  let exec_wait command args = 
-    (run command args).Result.status 
-  ;;
-
-  let fork_exec command args =
-    waitpid (fork_exec command (command::args) ())
+  let fork_wait command args =
+    let env = List.map clean_env (function | (a,b) -> a ^"="^ b) in
+    waitpid (fork_exec ~prog:command ~args:(command::args) ~env ())
   ;;
 
 end

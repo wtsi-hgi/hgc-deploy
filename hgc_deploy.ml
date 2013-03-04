@@ -27,6 +27,8 @@ module InstanceConfig = struct
   let container_root_directory = "/var/lib/lxc/archibald"
   (* Place holder for user name - will be replaced in container init. *)
   let container_user_name = "thetis"
+  (* Place holder for container base name - will be replaced in init. *)
+  let container_base_name = "archibald"
 
   let console_login_file = 
     ContainerConfig.aufs_union_loc ^ "/rootfs/etc/systemd/system/console-getty.service"
@@ -125,7 +127,7 @@ module Configure = struct
     | `No -> match Sys.is_file mp.device with
     | `Yes -> map_error (try_with (fun _ -> mkdir_p (Filename.dirname mp.directory))) 
     Exn.to_string >>= fun _ -> 
-    map_error (Shell.exec_wait "touch" [mp.directory]) (fun _ -> 
+    map_error (Shell.fork_wait "touch" [mp.directory]) (fun _ -> 
       "Failed to touch "^mp.directory^".\n")
     | `No -> map_error (try_with (fun _ -> mkdir_p mp.directory)) Exn.to_string
     | `Unknown -> Error "Cannot determine status of mount point."
@@ -142,7 +144,7 @@ module Configure = struct
 
   (*  Configure the container in various ways: *)
   (* 1. Overlay the AUFS image. *)
-  (* 1.5. Modify the config to point to the overlaid rootfs. *)
+  (* 1.5. Modify the config to point to the overlaid rootfs and to use a user-specific name. *)
   (* 2. Add the user into /etc/passwd. *)
   (* 3. Set up auto-boot into a console for the user. *)
   (* 4. Scramble the root password? *)
@@ -153,7 +155,7 @@ module Configure = struct
     let repoint_config () =
       let config_file = aufs_union_loc^"/config" in
       let esc = unstage (String.Escaping.escape ['/'] '\\') in
-      Shell.exec_wait "sed" [
+      Shell.fork_wait "sed" [
         "-i";
         "s/"^(esc container_root_directory)^"/"^(esc aufs_union_loc)^"/"; 
         config_file
@@ -177,12 +179,23 @@ module Configure = struct
       map_error ~f:(fun _ -> "Unable to add user.") 
     in
     let add_auto_boot username = 
-      let status = Shell.exec_wait "sed" [
+      let status = Shell.fork_wait "sed" [
         "-i";
         "s/"^container_user_name^"/"^username^"/";
         console_login_file
       ] in
       map_error status ~f:(fun _ -> "Unable to set up auto-boot.") 
+    in
+    let derive_container_name username =
+      let config_file = aufs_union_loc^"/config" in
+      let newname = container_base_name^"_"^username in
+      let status = Shell.fork_wait "sed" [
+        "-i";
+        "1 s/"^container_base_name^"/"^newname^"/";
+        config_file
+      ] in
+      map status ~f:(fun _ -> newname) |>
+      map_error ~f:(fun _ -> "Unable to derive container name.") 
     in
     let add_mounts () = 
       let fstab = aufs_union_loc^"/fstab" in
@@ -201,7 +214,8 @@ module Configure = struct
     repoint_config () >>= fun _ ->
     add_user () >>= fun name ->
     add_mounts () >>= fun _ ->
-    add_auto_boot name
+    add_auto_boot name >>= fun _ ->
+    derive_container_name name
   ;;
 end
 
@@ -225,13 +239,13 @@ let deploy template_loc =
     let status = 
       Verify.check_template template_loc >>= fun _ ->
       Container.in_container container_desc (fun () ->
-        begin
-          Configure.configure_container ();
-          Shell.fork_exec "lxc-start" [
-            "-n";container_desc.Container.container_name;
+        Result.map (Configure.configure_container ())
+        ~f:(fun name -> 
+          Shell.fork_wait "lxc-start" [
+            "-n";name;
             "-f";ContainerConfig.aufs_union_loc^"/config";
           ]
-        end
+          )
         )
     in
     match status with
