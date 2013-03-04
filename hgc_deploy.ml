@@ -188,7 +188,7 @@ module Configure = struct
     in
     let derive_container_name username =
       let config_file = aufs_union_loc^"/config" in
-      let newname = container_base_name^"_"^username in
+      let newname = container_base_name^"_"^username^"_"^(Int.to_string (Random.bits ())) in
       let status = Shell.fork_wait "sed" [
         "-i";
         "1 s/"^container_base_name^"/"^newname^"/";
