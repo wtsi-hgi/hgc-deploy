@@ -37,7 +37,11 @@ module InstanceConfig = struct
 
   let resources = ref []
 
-  let add_resource path = resources := (path :: !resources)
+  let add_resource path = 
+    match Sys.file_exists path with
+    | `Yes -> resources := (path :: !resources)
+    | _ -> ()
+
 
   let get_resources container_loc = List.map !resources (fun r ->
     Container.(
@@ -120,6 +124,7 @@ module Configure = struct
   open ContainerConfig
   open InstanceConfig
 
+  (* Given a mount point, make sure that it's created in the right way. *)
   let ensure_mp_created mp = 
     let open Result in 
     let open Result.Monad_infix in 
