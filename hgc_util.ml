@@ -37,6 +37,7 @@ module Shell = struct
     ("SHELL", "/bin/bash");
     ("PATH", "/usr/local/bin:/usr/bin:/bin");
     ("LANG", "en_GB.UTF-8");
+    ("IFS", "");
   ]
 
   module Result = struct
