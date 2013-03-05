@@ -43,16 +43,16 @@ module InstanceConfig = struct
     | _ -> ()
 
 
-  let get_resources container_loc = List.map !resources (fun r ->
-    Container.(
-    {
-      device = r;
-      directory = ContainerConfig.(
-        container_loc^"/rootfs/"^container_mount_loc^"/"^(Filename.basename r));
-      fstype = "none";
-      opts = ["bind"];
-    }))
-;;
+    let get_resources container_loc = List.map !resources (fun r ->
+      Container.(
+      {
+        device = r;
+        directory = ContainerConfig.(
+          container_loc^"/rootfs/"^container_mount_loc^"/"^(Filename.basename r));
+        fstype = "none";
+        opts = ["bind"];
+      }))
+  ;;
 
 end
 
@@ -143,12 +143,11 @@ module Configure = struct
   ;;
 
   let append fname output = 
-    let open Hgc_util.Pipe_infix in
     let open Result in 
-    try_with (fun _ -> 
+    let x = try_with (fun _ -> 
       Out_channel.with_file ~append:true fname
-      ~f:(fun t -> Out_channel.output_string t output)) |>
-    map_error ~f:Exn.to_string
+      ~f:(fun t -> Out_channel.output_string t output)) in
+    map_error x ~f:Exn.to_string
   ;;
 
   (* Configure the container in various ways. *)
