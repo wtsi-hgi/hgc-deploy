@@ -92,11 +92,7 @@ module Make(C : Config) : S = struct
   ;;
 
   let with_mount mountpoint f = match mount mountpoint with
-  | Ok dir -> let result = f () in
-  begin
-    unmount dir;
-    Ok result
-  end
+  | Ok dir -> protect ~f:(fun () -> Ok (f ())) ~finally:(fun () -> ignore (unmount dir))
   | Error a -> begin
     print_string a;
     Error a
