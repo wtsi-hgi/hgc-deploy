@@ -79,7 +79,7 @@ end = struct
 
   (* Allowed locations for CVMFS images *)
   let cvmfs_location = List.map ~f:Filename.parts [
-    "/cvmfs/ripley.repo";
+    "/cvmfs/mercury.repo";
     "/cvmfs/hgi.repo";
     "/var/lib/lxc"
   ];;
@@ -178,11 +178,13 @@ module Configure = struct
       let gen_shadow pwd_t = Passwd.(Printf.sprintf 
         "%s:%s:%d:%d:%d:%d:::\n" pwd_t.name "*" 
         ((Float.to_int (time ())) / 86400) 0 99999 7) in
+      let home_dir = container_loc^"/rootfs/home/"^login.Passwd.name in
       append (container_loc^"/rootfs/etc/passwd") (gen_passwd login) >>= fun _ -> 
       append (container_loc^"/rootfs/etc/shadow") (gen_shadow login) >>= fun _ ->
       (try_with 
-        (fun _ -> mkdir_p (container_loc^"/rootfs/home/"^login.Passwd.name)) |>
+        (fun _ -> mkdir_p home_dir) |>
         map_error ~f:Exn.to_string) |>
+      map ~f:(fun _ -> chown home_dir login.Passwd.uid login.Passwd.gid) |>
       map ~f:(fun _ -> login.Passwd.name) |> 
       map_error ~f:(fun _ -> "Unable to add user.") 
     in
