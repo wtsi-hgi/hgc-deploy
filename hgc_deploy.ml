@@ -32,7 +32,7 @@ module InstanceConfig = struct
   let container_base_name = "archibald"
 
   let console_login_file container_loc = 
-    container_loc ^ "/rootfs/etc/systemd/system/console-getty.service"
+    container_loc ^ "/rootfs/etc/systemd/system/autologin@.service"
   ;;
 
   let resources = ref []
@@ -256,7 +256,12 @@ let deploy template_loc =
           Shell.fork_wait "lxc-start" [
             "-n";name;
             "-f";container_loc^"/config";
-          ]
+            "-d"
+          ] >>= fun _ -> 
+          Shell.fork_wait "lxc-console" [
+            "-n";name;
+            "-t";"1"
+          ]  
           )
         )
     in
