@@ -258,10 +258,13 @@ let deploy template_loc =
             "-f";container_loc^"/config";
             "-d"
           ] >>= fun _ -> 
-          Shell.fork_wait "lxc-console" [
-            "-n";name;
-            "-t";"1"
-          ]  
+            begin
+              Thread.delay 0.25;
+              Shell.fork_wait "lxc-console" [
+                "-n";name;
+                "-t";"1"
+              ]
+            end
           )
         )
     in
