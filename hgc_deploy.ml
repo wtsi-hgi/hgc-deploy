@@ -27,7 +27,7 @@ module InstanceConfig = struct
   (* Place holder for root directory - will be replaced in LXC config.*)
   let container_root_directory = "/var/lib/lxc/archibald"
   (* Place holder for user name - will be replaced in container init. *)
-  let container_user_name = "thetis"
+  let container_user_name = "root"
   (* Place holder for container base name - will be replaced in init. *)
   let container_base_name = "archibald"
 
@@ -256,7 +256,9 @@ let deploy template_loc =
           Shell.fork_wait "lxc-start" [
             "-n";name;
             "-f";container_loc^"/config";
-            "-d"
+            "-d";
+            "-o";container_loc^"/lxc-log";
+            "-l";"DEBUG"
           ] >>= fun _ -> 
             begin
               Thread.delay 0.25;
